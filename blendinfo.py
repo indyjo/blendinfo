@@ -62,15 +62,16 @@ def read_dna1(data):
 			(field_typeidx,field_nameidx) = struct.unpack("HH", data[ofs:ofs+4])
 			ofs += 4
 			field_name = names[field_nameidx]
+			orig_field_name = field_name
 			field_bytes = 8 if field_name.startswith('*') else types[field_typeidx][1]
 			while field_name.endswith(']'):
 				openbrace = field_name.index('[')
 				closebrace = field_name.index(']')
 				array_size = int(field_name[openbrace+1:closebrace])
 				field_bytes *= array_size
-				field_name = field_name[closebrace+1:]
+				field_name = field_name[:openbrace] + field_name[closebrace+1:]
+			print("       {:>3} @ {:>5}: field {:16} :: {}".format(j, fields_bytes, orig_field_name, str(types[field_typeidx])))
 			fields_bytes += field_bytes
-			print("       {}: field {} :: {}".format(j, field_name, types[field_typeidx]))
 		print("       Bytes padding: ", types[typeidx][1] - fields_bytes)
 	# 4-byte alignment
 	data = data[(ofs + 3) // 4 * 4:]
@@ -84,18 +85,18 @@ file = open(sys.argv[1], mode="rb")
 header = file.read(12)
 print("Header:", header)
 
-psize = 4 if header[7] == b'_' else 8
+PTR_SIZE = 4 if header[7] == b'_' else 8
 bigend = header[8] == b'V'
-print(" -> pointer size:", psize)
+print(" -> pointer size:", PTR_SIZE)
 print(" -> big endian:  ", bigend)
 
 nblocks = 0
 sizesum = 0
 while True:
-	header = file.read(16+psize)
+	header = file.read(16 + PTR_SIZE)
 	nblocks += 1
 	print("Block:", header[0:4])
-	size, oldp, idx, cnt = struct.unpack(('>' if bigend else '<') + "xxxxI" + ('Q' if psize==8 else 'I') + "II", header)
+	size, oldp, idx, cnt = struct.unpack(('>' if bigend else '<') + "xxxxI" + ('Q' if PTR_SIZE == 8 else 'I') + "II", header)
 	sizesum += size
 	print(" -> size (bytes):", size)
 	print(" -> SDNA index:  ", idx)
