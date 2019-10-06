@@ -2,7 +2,7 @@
 
 import struct
 import sys
-from typing import List, Tuple, IO
+from typing import List, Tuple, IO, Dict
 
 TypeInf = Tuple[str, int]
 
@@ -61,8 +61,11 @@ class BlendFile:
 			self.PTR_SIZE * 8
 		)
 
-	def _unpack(self, fmt, data):
+	def unpack(self, fmt, data):
 		return struct.unpack(self.EF + fmt, data)
+
+	def pack(self, fmt, *values):
+		return struct.pack(self.EF + fmt, *values)
 
 	def _seek_after_header(self):
 		self.file.seek(12, 0)
@@ -72,7 +75,7 @@ class BlendFile:
 		while True:
 			header = self.file.read(self.HEADER_SIZE)
 			fmt = "4sI" + self.PTR + "II"
-			block, size, oldp, idx, cnt = self._unpack(fmt, header)
+			block, size, oldp, idx, cnt = self.unpack(fmt, header)
 			if block == b'ENDB':
 				break
 			yield block, size, oldp, idx, cnt
@@ -110,13 +113,169 @@ class BlendFile:
 
 		return ndatablocks, ndatablocks_total, nobjs, nobjs_total, nbytes, nbytes_total
 
+	def dump_dot_graph(self, dna_structs: List[DNAStruct]):
+		print("digraph blend_file {")
+		# excludes = ['MTexPoly', 'MPoly', 'MLoopUV', 'MVert', 'MEdge', 'MLoop', "ARegion", "MDeformVert",
+		#            "IDProperty", "bNodeSocket", "CustomDataLayer"]
+		excludes = []
+		idx_by_name = {}
+		for idx, ds in enumerate(dna_structs):
+			idx_by_name[ds.name] = idx
+
+		objects = {}
+		for block, size, oldp, idx, cnt in self._all_block_headers():
+			self.file.seek(size, 1)
+			id = "_{:x}".format(oldp)
+			if idx > 0:
+				ds = dna_structs[idx]
+				if ds.name in excludes or ds.fields[0].orig_name != "id":
+					continue
+				label = ds.name
+			else:
+				continue
+				label = "{} of size {}".format(block.decode('ascii'), size)
+			objects[oldp] = True
+			if cnt > 1:
+				label = "{} x {}".format(cnt, label)
+			print('  {} [label="{}"];'.format(id, label))
+
+		print(" // -------------- Edges --------------")
+
+		def dump_edges(data, ds: DNAStruct):
+			for f in ds.fields:
+				if f.is_ptr:
+					if f.typeinf[0] in excludes:
+						continue
+					(tgtp,) = struct.unpack(self.EF + self.PTR, data[f.offset:f.offset + self.PTR_SIZE])
+					if tgtp != 0 and tgtp in objects:
+						tgt_id = "_{:x}".format(tgtp)
+						print('  {} -> {} [label="{}"]; // {}'.format(id, tgt_id, f.orig_name, f.typeinf))
+					continue
+				if f.typeinf[0] not in idx_by_name:
+					continue
+				ds_field = dna_structs[idx_by_name[f.typeinf[0]]]
+				dump_edges(data[f.offset:f.offset + f.size], ds_field)
+
+		for block, size, oldp, idx, cnt in self._all_block_headers():
+			if idx == 0:
+				self.file.seek(size, 1)
+				continue
+			ds = dna_structs[idx]
+			if ds.name in excludes or ds.fields[0].orig_name != "id":
+				self.file.seek(size, 1)
+				continue
+			print("  // {} x {}".format(ds.name, cnt))
+			data = self.file.read(size)
+			id = "_{:x}".format(oldp)
+			dump_edges(data, ds)
+
+		print("}")
+
+	def size_stats(self, dna_structs: List[DNAStruct]) -> List[Tuple[str, int]]:
+		accum = {}
+		for block, size, oldp, idx, cnt in self._all_block_headers():
+			self.file.seek(size, 1)
+			if idx > 0:
+				key = dna_structs[idx].name
+			else:
+				key = block.decode('ascii')
+			if not key in accum:
+				accum[key] = (0, 0)
+			s, c = accum[key]
+			s += size
+			c += cnt
+			accum[key] = (s, c)
+
+		return sorted(accum.items(), key=lambda v: v[1][0])
+
+	def _dump_object(self, data: bytes, ds: DNAStruct, dna_structs: List[DNAStruct], idx_by_name: Dict[str, int],
+	                 indent=""):
+		print("{{ // {} bytes".format(ds.size))
+		for f in ds.fields:
+			ftype = f.typeinf[0]
+			if not f.is_ptr and len(f.dims) > 0:
+				print("{}  {} {} // {} bytes".format(indent, ftype, f.orig_name, f.size))
+				continue
+			print("{}  {} {} = ".format(indent, ftype, f.orig_name), end='')
+			field_data = data[f.offset:f.offset + f.size]
+			if f.is_ptr:
+				print("{:x}".format(self.unpack(self.PTR, field_data)[0]))
+			elif ftype in idx_by_name:
+				field_ds = dna_structs[idx_by_name[ftype]]
+				self._dump_object(field_data, field_ds, dna_structs, idx_by_name, indent + "  ")
+			elif ftype == 'int':
+				print(self.unpack('i', field_data)[0])
+			elif ftype == 'char':
+				print(self.unpack('c', field_data)[0])
+			elif ftype == 'short':
+				print(self.unpack('h', field_data)[0])
+			elif ftype == 'float':
+				print(self.unpack('f', field_data)[0])
+			elif ftype == 'double':
+				print(self.unpack('d', field_data)[0])
+			else:
+				print("// {} bytes".format(f.size))
+		print(indent + "}")
+
+	def find_address(self, addr, dna_structs: List[DNAStruct]):
+		for block, size, oldp, idx, cnt in self._all_block_headers():
+			if addr < oldp or addr > oldp + size:
+				self.file.seek(size, 1)
+				continue
+
+			if idx == 0:
+				print("Found address {:x} in {} segment of size {} at {:x}".format(
+					addr, block.decode('ascii'), size, oldp,
+				))
+				break
+
+			ds = dna_structs[idx]
+			print("Found address {:x} in {} segment of size {} at {:x} containing {} {} of size {}".format(
+				addr, block.decode('ascii'), size, oldp, cnt, ds.name, ds.size
+			))
+			offset = addr - oldp
+			offset_in_obj = offset % ds.size
+			object_base = offset - offset_in_obj
+
+			file.seek(object_base, 1)
+			data = file.read(ds.size)
+			file.seek(size - object_base - ds.size)
+
+			idx_by_name = {}
+			for _idx, _ds in enumerate(dna_structs):
+				idx_by_name[_ds.name] = _idx
+			self._dump_object(data, ds, dna_structs, idx_by_name)
+			break
+
+	def dump_all(self, dna_structs: List[DNAStruct]):
+		idx_by_name = {}
+		for _idx, _ds in enumerate(dna_structs):
+			idx_by_name[_ds.name] = _idx
+
+		for block, size, oldp, idx, cnt in self._all_block_headers():
+			if idx == 0:
+				print("{} segment of size {} at {:x}".format(block.decode('ascii'), size, oldp))
+				self.file.seek(size, 1)
+				continue
+
+			ds = dna_structs[idx]
+			print("{} segment of size {} at {:x} containing {} objects of type {}".format(block, size, oldp, cnt,
+			                                                                              ds.name))
+			assert cnt * ds.size == size
+			for i in range(0, cnt):
+				data = self.file.read(ds.size)
+				print("  #{} = ".format(i), end='')
+				self._dump_object(data, ds, dna_structs, idx_by_name, "  ")
+
+
+
 	def _parse_dna1(self, data) -> List[DNAStruct]:
 		data = data[4:]
 
 		names = []
 		types = []
 
-		name, num = self._unpack("4sI", data[:8])
+		name, num = self.unpack("4sI", data[:8])
 		data = data[8:]
 		ofs = 0
 		for i in range(num):
@@ -127,7 +286,7 @@ class BlendFile:
 		# 4-byte alignment
 		data = data[(ofs + 3) // 4 * 4:]
 
-		name, num = self._unpack("4sI", data[:8])
+		name, num = self.unpack("4sI", data[:8])
 		data = data[8:]
 		ofs = 0
 		for i in range(num):
@@ -138,28 +297,28 @@ class BlendFile:
 		# 4-byte alignment
 		data = data[(ofs + 3) // 4 * 4:]
 
-		name = self._unpack("4s", data[:4])
+		name = self.unpack("4s", data[:4])
 		data = data[4:]
 		ofs = 0
 		for i, (name, _) in enumerate(types):
-			tlen = self._unpack("H", data[ofs:ofs + 2])[0]
+			tlen = self.unpack("H", data[ofs:ofs + 2])[0]
 			ofs += 2
 			types[i] = (name, tlen)
 		# 4-byte alignment
 		data = data[(ofs + 3) // 4 * 4:]
 
-		name, num = self._unpack("4sI", data[:8])
+		name, num = self.unpack("4sI", data[:8])
 		data = data[8:]
 		ofs = 0
 		dna_structs = []
 		for i in range(num):
-			typeidx, nfields = self._unpack("HH", data[ofs:ofs + 4])
+			typeidx, nfields = self.unpack("HH", data[ofs:ofs + 4])
 
 			ofs += 4
 			field_ofs = 0
 			dna_fields = []
 			for j in range(nfields):
-				(field_typeidx, field_nameidx) = self._unpack("HH", data[ofs:ofs + 4])
+				(field_typeidx, field_nameidx) = self.unpack("HH", data[ofs:ofs + 4])
 				field_name = names[field_nameidx]
 				dna_field = DNAField(field_name, field_ofs, types[field_typeidx], self.PTR_SIZE)
 				dna_fields.append(dna_field)  #
@@ -176,7 +335,11 @@ def parse_args():
 	parser.add_argument('blendfile', metavar='PATH', help=".blend file to examine", nargs=1)
 	parser.add_argument("--info", action="store_true", help="Print information about the .blend file itself")
 	parser.add_argument("--dna", action="store_true", help="Print detailed information about DNA structs")
+	parser.add_argument("--dump", action="store_true", help="Print contents of all contained DNA data")
 	parser.add_argument("--id", action="store_true", help="Print summary on 'ID' structs")
+	parser.add_argument("--dot", action="store_true", help="Print dot graph fo whole file")
+	parser.add_argument("--size", action="store_true", help="Print statistic on size claimed by data types")
+	parser.add_argument("--find", metavar="ADDR", help="Finds the given address in the file's data")
 	return parser.parse_args()
 
 
@@ -190,15 +353,34 @@ if __name__ == "__main__":
 	for path in args.blendfile:
 		with open(path, mode="r+b") as file:
 			bf = BlendFile(file)
+
 			if args.info:
 				print(bf)
-			if args.dna or args.id:
+
+			if args.dna or args.dump or args.id or args.dot or args.size or args.find != None:
 				dna_structs = bf.scan_dna()
+
 			if args.dna:
 				for i, s in enumerate(dna_structs):
 					print("{} [#{}]".format(s, i))
 					for f in s.fields:
 						print("   ", f)
+
+			if args.dump:
+				bf.dump_all(dna_structs)
+
 			if args.id:
 				print("{} of {} datablocks containing {} of {} objects totalling {} of {} bytes are ID".format(
 					*bf.count_id_content(dna_structs)))
+
+			if args.dot:
+				bf.dump_dot_graph(dna_structs)
+
+			if args.size:
+				for k, v in bf.size_stats(dna_structs):
+					s, c = v
+					print("  {:24} : {:9} bytes in {} objects".format(k, s, c))
+
+			if args.find != None:
+				addr = int(args.find, 16)
+				bf.find_address(addr, dna_structs)
