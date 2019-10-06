@@ -193,11 +193,20 @@ class BlendFile:
 		print("{{ // {} bytes".format(ds.size))
 		for f in ds.fields:
 			ftype = f.typeinf[0]
-			if not f.is_ptr and len(f.dims) > 0:
-				print("{}  {} {} // {} bytes".format(indent, ftype, f.orig_name, f.size))
-				continue
-			print("{}  {} {} = ".format(indent, ftype, f.orig_name), end='')
 			field_data = data[f.offset:f.offset + f.size]
+			print("{}  {} {}".format(indent, ftype, f.orig_name), end='')
+			if not f.is_ptr and ftype == "char" and len(f.dims) == 1:
+				# char array
+				s = data[f.offset:f.offset + min(f.size, 128)]
+				if b'\x00' in s:
+					s = s[:s.index(b'\x00')]
+				print(" = {}{}".format(s, " // + {} bytes ".format(f.size - len(s))) if len(s) < f.size else "")
+				continue
+			if not f.is_ptr and len(f.dims) > 0:
+				print(" // {} bytes".format(f.size))
+				continue
+
+			print(" = ", end='')
 			if f.is_ptr:
 				print("{:x}".format(self.unpack(self.PTR, field_data)[0]))
 			elif ftype in idx_by_name:
@@ -224,14 +233,14 @@ class BlendFile:
 				continue
 
 			if idx == 0:
-				print("Found address {:x} in {} segment of size {} at {:x}".format(
-					addr, block.decode('ascii'), size, oldp,
+				print("Found address {:x} in {} block of size {} at {:x}".format(
+					addr, block, size, oldp,
 				))
 				break
 
 			ds = dna_structs[idx]
-			print("Found address {:x} in {} segment of size {} at {:x} containing {} {} of size {}".format(
-				addr, block.decode('ascii'), size, oldp, cnt, ds.name, ds.size
+			print("Found address {:x} in {} block of size {} at {:x} containing {} {} of size {}".format(
+				addr, block, size, oldp, cnt, ds.name, ds.size
 			))
 			offset = addr - oldp
 			offset_in_obj = offset % ds.size
@@ -254,20 +263,27 @@ class BlendFile:
 
 		for block, size, oldp, idx, cnt in self._all_block_headers():
 			if idx == 0:
-				print("{} segment of size {} at {:x}".format(block.decode('ascii'), size, oldp))
-				self.file.seek(size, 1)
+				print("{} block of size {} at {:x}".format(block, size, oldp))
+				maxbytes = 64
+				data = self.file.read(min(size, maxbytes))
+				if b'\000' in data:
+					data = data[:data.index(b'\000')]
+				print(" ", data)
+				if size > len(data):
+					print("  [ ...", size - len(data), "more bytes ... ]")
+
+				if size > maxbytes:
+					self.file.seek(size - maxbytes, 1)
 				continue
 
 			ds = dna_structs[idx]
-			print("{} segment of size {} at {:x} containing {} objects of type {}".format(block, size, oldp, cnt,
-			                                                                              ds.name))
+			print("{} block of size {} at {:x} containing {} objects of type {}".format(block, size, oldp, cnt,
+			                                                                            ds.name))
 			assert cnt * ds.size == size
 			for i in range(0, cnt):
 				data = self.file.read(ds.size)
 				print("  #{} = ".format(i), end='')
 				self._dump_object(data, ds, dna_structs, idx_by_name, "  ")
-
-
 
 	def _parse_dna1(self, data) -> List[DNAStruct]:
 		data = data[4:]
