@@ -92,5 +92,5 @@ Resources about the .blend file format
  - There is Python code for reading .blend files provided by the Blender developers [here](https://developer.blender.org/source/blender-file/) and [here](https://developer.blender.org/diffusion/B/browse/master/doc/blender_file_format/BlendFileReader.py).
  
  - Holger Machens provides a [Java API for reading and writing .blend files](http://homac.cakelab.org/projects/JavaBlend/index.html) which uses code generated from DNA data. He also provides a [specification of the .blend format](http://homac.cakelab.org/projects/JavaBlend/spec.html) and [out-of-tree documentation](https://github.com/homacs/JavaBlendDocs) for structs and fields.
-  - Jav Walter provides [blend_info](https://www.janwalter.org/jekyll/blender/rust/blendinfo/2019/05/28/blend_info.html), a similar tool programmed in Rust ([git repository](https://codeberg.org/wahn/rs_blender)).
+  - Jan Walter provides [blend_info](https://www.janwalter.org/jekyll/blender/rust/blendinfo/2019/05/28/blend_info.html), a similar tool programmed in Rust ([git repository](https://codeberg.org/wahn/rs_blender)).
   
