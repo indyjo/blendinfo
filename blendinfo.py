@@ -13,7 +13,7 @@ class DNAField:
 		self.offset = offset
 		self.typeinf = typeinf
 		self.size = typeinf[1]
-		self.dims = []
+		self.dims: list[int] = []
 		while name.endswith("]"):
 			openbrace = name.index('[')
 			closebrace = name.index(']')
@@ -33,7 +33,7 @@ class DNAField:
 
 
 class DNAStruct:
-	def __init__(self, name, size, fields: List[DNAField]):
+	def __init__(self, name: str, size: int, fields: List[DNAField]):
 		self.name = name
 		self.size = size
 		self.fields = fields
@@ -71,6 +71,11 @@ class BlendFile:
 		self.file.seek(12, 0)
 
 	def _all_block_headers(self):
+		block: bytes
+		size: int
+		oldp: int
+		idx: int
+		cnt: int
 		self._seek_after_header()
 		while True:
 			header = self.file.read(self.HEADER_SIZE)
@@ -285,11 +290,11 @@ class BlendFile:
 				print("  #{} = ".format(i), end='')
 				self._dump_object(data, ds, dna_structs, idx_by_name, "  ")
 
-	def _parse_dna1(self, data) -> List[DNAStruct]:
+	def _parse_dna1(self, data: bytes) -> List[DNAStruct]:
 		data = data[4:]
 
-		names = []
-		types = []
+		names: list[str] = []
+		types: list[TypeInf] = []
 
 		name, num = self.unpack("4sI", data[:8])
 		data = data[8:]
@@ -326,7 +331,7 @@ class BlendFile:
 		name, num = self.unpack("4sI", data[:8])
 		data = data[8:]
 		ofs = 0
-		dna_structs = []
+		dna_structs: list[DNAStruct] = []
 		for i in range(num):
 			typeidx, nfields = self.unpack("HH", data[ofs:ofs + 4])
 
@@ -373,30 +378,37 @@ if __name__ == "__main__":
 			if args.info:
 				print(bf)
 
+			dna_structs = None
 			if args.dna or args.dump or args.id or args.dot or args.size or args.find != None:
 				dna_structs = bf.scan_dna()
 
 			if args.dna:
+				assert dna_structs is not None
 				for i, s in enumerate(dna_structs):
 					print("{} [#{}]".format(s, i))
 					for f in s.fields:
 						print("   ", f)
 
 			if args.dump:
+				assert dna_structs is not None
 				bf.dump_all(dna_structs)
 
 			if args.id:
+				assert dna_structs is not None
 				print("{} of {} datablocks containing {} of {} objects totalling {} of {} bytes are ID".format(
 					*bf.count_id_content(dna_structs)))
 
 			if args.dot:
+				assert dna_structs is not None
 				bf.dump_dot_graph(dna_structs)
 
 			if args.size:
+				assert dna_structs is not None
 				for k, v in bf.size_stats(dna_structs):
 					s, c = v
 					print("  {:24} : {:9} bytes in {} objects".format(k, s, c))
 
 			if args.find != None:
+				assert dna_structs is not None
 				addr = int(args.find, 16)
 				bf.find_address(addr, dna_structs)
