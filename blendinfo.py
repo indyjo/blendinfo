@@ -247,7 +247,7 @@ class BlendFile:
 				elif ftype == 'ushort':
 					print(self.unpack('H', field_data)[0])
 				else:
-					print("// {} bytes".format(f.size))
+					print("// {} bytes (unparsed type)".format(f.size))
 		
 			# Handle arrays.
 			if not f.is_ptr and len(f.dims) > 0:
