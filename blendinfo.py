@@ -2,6 +2,7 @@
 
 import struct
 import sys
+from functools import cache
 from typing import List, Tuple, IO, Dict
 
 TypeInf = Tuple[str, int]
@@ -41,6 +42,17 @@ class DNAStruct:
 
 	def __str__(self):
 		return "struct {} // {} bytes{}".format(self.name, self.size, ", is ID" if self.is_id else "")
+
+
+@cache
+def unravel_array_index(i: int, shape: tuple[int, ...]) -> str:
+	array_index = ''
+	indices: list[str] = []
+	for dim in reversed(shape):
+		i, i_ = divmod(i, dim)
+		indices.append(str(i_))
+	array_index = ','.join(reversed(indices))
+	return array_index
 
 
 class BlendFile:
@@ -209,13 +221,14 @@ class BlendFile:
 				continue
 			if not f.is_ptr and len(f.dims) > 0:
 				size_str = " // {} bytes".format(f.size)
-				if ftype == "float" and len(f.dims) == 1:
+				if ftype == "float":
 					print(" = {{ {}".format(size_str))
-					dim = f.dims[0]
-					item_size = f.size // dim
+					dim = f.size // f.typeinf[1]
+					item_size = f.typeinf[1]
+					dim_tuple = tuple(f.dims)  # Has to be hashable for caching.
 					for i in range(dim):
 						value = self.unpack('f', field_data[i*item_size:(i+1)*item_size])[0]
-						print("{}    #{} = {}".format(indent, i, value))
+						print("{}    #{} = {}".format(indent, unravel_array_index(i, dim_tuple), value))
 					print("{}  }}".format(indent))
 				else:
 					print(size_str)
