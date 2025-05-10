@@ -236,6 +236,16 @@ class BlendFile:
 					print(self.unpack('f', field_data)[0])
 				elif ftype == 'double':
 					print(self.unpack('d', field_data)[0])
+				elif ftype == 'uchar':
+					print(self.unpack('B', field_data)[0])
+				elif ftype == 'uint64_t':
+					print(self.unpack('Q', field_data)[0])
+				elif ftype == 'int64_t':
+					print(self.unpack('q', field_data)[0])
+				elif ftype == 'int8_t':
+					print(self.unpack('b', field_data)[0])
+				elif ftype == 'ushort':
+					print(self.unpack('H', field_data)[0])
 				else:
 					print("// {} bytes".format(f.size))
 		
