@@ -22,7 +22,8 @@ class DNAField:
 			self.dims.append(dim)
 			self.size *= dim
 			name = name[:openbrace] + name[closebrace + 1:]
-		if name.startswith("*"):
+		# '(*' - method pointers.
+		if name.startswith("*") or name.startswith("(*"):
 			self.size = ptr_size
 			self.is_ptr = True
 		else:
