@@ -208,7 +208,17 @@ class BlendFile:
 				print(" = {}{}".format(s, " // + {} bytes ".format(f.size - len(s))) if len(s) < f.size else "")
 				continue
 			if not f.is_ptr and len(f.dims) > 0:
-				print(" // {} bytes".format(f.size))
+				size_str = " // {} bytes".format(f.size)
+				if ftype == "float" and len(f.dims) == 1:
+					print(" = {{ {}".format(size_str))
+					dim = f.dims[0]
+					item_size = f.size // dim
+					for i in range(dim):
+						value = self.unpack('f', field_data[i*item_size:(i+1)*item_size])[0]
+						print("{}    #{} = {}".format(indent, i, value))
+					print("{}  }}".format(indent))
+				else:
+					print(size_str)
 				continue
 
 			print(" = ", end='')
