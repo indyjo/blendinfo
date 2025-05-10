@@ -219,39 +219,42 @@ class BlendFile:
 					s = s[:s.index(b'\x00')]
 				print(" = {}{}".format(s, " // + {} bytes ".format(f.size - len(s))) if len(s) < f.size else "")
 				continue
+
+			def _dump_basic_field(field_data: bytes, indent: str) -> None:
+				if f.is_ptr:
+					print("{:x}".format(self.unpack(self.PTR, field_data)[0]))
+				elif ftype in idx_by_name:
+					field_ds = dna_structs[idx_by_name[ftype]]
+					self._dump_object(field_data, field_ds, dna_structs, idx_by_name, indent + "  ")
+				elif ftype == 'int':
+					print(self.unpack('i', field_data)[0])
+				elif ftype == 'char':
+					print(self.unpack('c', field_data)[0])
+				elif ftype == 'short':
+					print(self.unpack('h', field_data)[0])
+				elif ftype == 'float':
+					print(self.unpack('f', field_data)[0])
+				elif ftype == 'double':
+					print(self.unpack('d', field_data)[0])
+				else:
+					print("// {} bytes".format(f.size))
+		
+			# Handle arrays.
 			if not f.is_ptr and len(f.dims) > 0:
 				size_str = " // {} bytes".format(f.size)
-				if ftype == "float":
-					print(" = {{ {}".format(size_str))
-					dim = f.size // f.typeinf[1]
-					item_size = f.typeinf[1]
-					dim_tuple = tuple(f.dims)  # Has to be hashable for caching.
-					for i in range(dim):
-						value = self.unpack('f', field_data[i*item_size:(i+1)*item_size])[0]
-						print("{}    #{} = {}".format(indent, unravel_array_index(i, dim_tuple), value))
-					print("{}  }}".format(indent))
-				else:
-					print(size_str)
+				print(" = {{ {}".format(size_str))
+				dim = f.size // f.typeinf[1]
+				item_size = f.typeinf[1]
+				dim_tuple = tuple(f.dims)  # Has to be hashable for caching.
+				for i in range(dim):
+					item_data = field_data[i * item_size : (i + 1) * item_size]
+					print("{}    #{} = ".format(indent, unravel_array_index(i, dim_tuple)), end='')
+					_dump_basic_field(item_data, indent + "  ")
+				print("{}  }}".format(indent))
 				continue
 
 			print(" = ", end='')
-			if f.is_ptr:
-				print("{:x}".format(self.unpack(self.PTR, field_data)[0]))
-			elif ftype in idx_by_name:
-				field_ds = dna_structs[idx_by_name[ftype]]
-				self._dump_object(field_data, field_ds, dna_structs, idx_by_name, indent + "  ")
-			elif ftype == 'int':
-				print(self.unpack('i', field_data)[0])
-			elif ftype == 'char':
-				print(self.unpack('c', field_data)[0])
-			elif ftype == 'short':
-				print(self.unpack('h', field_data)[0])
-			elif ftype == 'float':
-				print(self.unpack('f', field_data)[0])
-			elif ftype == 'double':
-				print(self.unpack('d', field_data)[0])
-			else:
-				print("// {} bytes".format(f.size))
+			_dump_basic_field(field_data, indent)
 		print(indent + "}")
 
 	def find_address(self, addr, dna_structs: List[DNAStruct]):
