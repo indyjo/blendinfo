@@ -2,6 +2,7 @@
 
 import struct
 import sys
+import math
 from functools import cache
 from typing import List, Tuple, IO, Dict
 
@@ -15,6 +16,15 @@ class DNAField:
 		self.typeinf = typeinf
 		self.size = typeinf[1]
 		self.dims: list[int] = []
+
+		# Calculate size first as there are arrays of pointers.
+		# '(*' - method pointers.
+		if name.startswith("*") or name.startswith("(*"):
+			self.size = ptr_size
+			self.is_ptr = True
+		else:
+			self.is_ptr = False
+	
 		while name.endswith("]"):
 			openbrace = name.index('[')
 			closebrace = name.index(']')
@@ -22,12 +32,6 @@ class DNAField:
 			self.dims.append(dim)
 			self.size *= dim
 			name = name[:openbrace] + name[closebrace + 1:]
-		# '(*' - method pointers.
-		if name.startswith("*") or name.startswith("(*"):
-			self.size = ptr_size
-			self.is_ptr = True
-		else:
-			self.is_ptr = False
 
 	def __str__(self):
 		decl = "{:10} {}".format(self.typeinf[0], self.orig_name)
@@ -251,11 +255,11 @@ class BlendFile:
 					print("// {} bytes (unparsed type)".format(f.size))
 		
 			# Handle arrays.
-			if not f.is_ptr and len(f.dims) > 0:
+			if len(f.dims) > 0:
 				size_str = " // {} bytes".format(f.size)
 				print(" = {{ {}".format(size_str))
-				dim = f.size // f.typeinf[1]
-				item_size = f.typeinf[1]
+				dim = math.prod(f.dims)
+				item_size = f.size // dim
 				dim_tuple = tuple(f.dims)  # Has to be hashable for caching.
 				for i in range(dim):
 					item_data = field_data[i * item_size : (i + 1) * item_size]
@@ -425,6 +429,9 @@ if __name__ == "__main__":
 					print("{} [#{}]".format(s, i))
 					for f in s.fields:
 						print("   ", f)
+					if s.fields:
+						last_field = s.fields[-1]
+						assert (last_field.offset + last_field.size) == s.size
 
 			if args.dump:
 				assert dna_structs is not None
