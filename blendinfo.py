@@ -2,6 +2,8 @@
 
 import struct
 import sys
+import math
+from functools import cache
 from typing import List, Tuple, IO, Dict
 
 TypeInf = Tuple[str, int]
@@ -13,7 +15,16 @@ class DNAField:
 		self.offset = offset
 		self.typeinf = typeinf
 		self.size = typeinf[1]
-		self.dims = []
+		self.dims: list[int] = []
+
+		# Calculate size first as there are arrays of pointers.
+		# '(*' - method pointers.
+		if name.startswith("*") or name.startswith("(*"):
+			self.size = ptr_size
+			self.is_ptr = True
+		else:
+			self.is_ptr = False
+	
 		while name.endswith("]"):
 			openbrace = name.index('[')
 			closebrace = name.index(']')
@@ -21,11 +32,6 @@ class DNAField:
 			self.dims.append(dim)
 			self.size *= dim
 			name = name[:openbrace] + name[closebrace + 1:]
-		if name.startswith("*"):
-			self.size = ptr_size
-			self.is_ptr = True
-		else:
-			self.is_ptr = False
 
 	def __str__(self):
 		decl = "{:10} {}".format(self.typeinf[0], self.orig_name)
@@ -33,7 +39,7 @@ class DNAField:
 
 
 class DNAStruct:
-	def __init__(self, name, size, fields: List[DNAField]):
+	def __init__(self, name: str, size: int, fields: List[DNAField]):
 		self.name = name
 		self.size = size
 		self.fields = fields
@@ -41,6 +47,17 @@ class DNAStruct:
 
 	def __str__(self):
 		return "struct {} // {} bytes{}".format(self.name, self.size, ", is ID" if self.is_id else "")
+
+
+@cache
+def unravel_array_index(i: int, shape: tuple[int, ...]) -> str:
+	array_index = ''
+	indices: list[str] = []
+	for dim in reversed(shape):
+		i, i_ = divmod(i, dim)
+		indices.append(str(i_))
+	array_index = ','.join(reversed(indices))
+	return array_index
 
 
 class BlendFile:
@@ -71,6 +88,11 @@ class BlendFile:
 		self.file.seek(12, 0)
 
 	def _all_block_headers(self):
+		block: bytes
+		size: int
+		oldp: int
+		idx: int
+		cnt: int
 		self._seek_after_header()
 		while True:
 			header = self.file.read(self.HEADER_SIZE)
@@ -202,28 +224,52 @@ class BlendFile:
 					s = s[:s.index(b'\x00')]
 				print(" = {}{}".format(s, " // + {} bytes ".format(f.size - len(s))) if len(s) < f.size else "")
 				continue
-			if not f.is_ptr and len(f.dims) > 0:
-				print(" // {} bytes".format(f.size))
+
+			def _dump_basic_field(field_data: bytes, indent: str) -> None:
+				if f.is_ptr:
+					print("{:x}".format(self.unpack(self.PTR, field_data)[0]))
+				elif ftype in idx_by_name:
+					field_ds = dna_structs[idx_by_name[ftype]]
+					self._dump_object(field_data, field_ds, dna_structs, idx_by_name, indent + "  ")
+				elif ftype == 'int':
+					print(self.unpack('i', field_data)[0])
+				elif ftype == 'char':
+					print(self.unpack('c', field_data)[0])
+				elif ftype == 'short':
+					print(self.unpack('h', field_data)[0])
+				elif ftype == 'float':
+					print(self.unpack('f', field_data)[0])
+				elif ftype == 'double':
+					print(self.unpack('d', field_data)[0])
+				elif ftype == 'uchar':
+					print(self.unpack('B', field_data)[0])
+				elif ftype == 'uint64_t':
+					print(self.unpack('Q', field_data)[0])
+				elif ftype == 'int64_t':
+					print(self.unpack('q', field_data)[0])
+				elif ftype == 'int8_t':
+					print(self.unpack('b', field_data)[0])
+				elif ftype == 'ushort':
+					print(self.unpack('H', field_data)[0])
+				else:
+					print("// {} bytes (unparsed type)".format(f.size))
+		
+			# Handle arrays.
+			if len(f.dims) > 0:
+				size_str = " // {} bytes".format(f.size)
+				print(" = {{ {}".format(size_str))
+				dim = math.prod(f.dims)
+				item_size = f.size // dim
+				dim_tuple = tuple(f.dims)  # Has to be hashable for caching.
+				for i in range(dim):
+					item_data = field_data[i * item_size : (i + 1) * item_size]
+					print("{}    #{} = ".format(indent, unravel_array_index(i, dim_tuple)), end='')
+					_dump_basic_field(item_data, indent + "  ")
+				print("{}  }}".format(indent))
 				continue
 
 			print(" = ", end='')
-			if f.is_ptr:
-				print("{:x}".format(self.unpack(self.PTR, field_data)[0]))
-			elif ftype in idx_by_name:
-				field_ds = dna_structs[idx_by_name[ftype]]
-				self._dump_object(field_data, field_ds, dna_structs, idx_by_name, indent + "  ")
-			elif ftype == 'int':
-				print(self.unpack('i', field_data)[0])
-			elif ftype == 'char':
-				print(self.unpack('c', field_data)[0])
-			elif ftype == 'short':
-				print(self.unpack('h', field_data)[0])
-			elif ftype == 'float':
-				print(self.unpack('f', field_data)[0])
-			elif ftype == 'double':
-				print(self.unpack('d', field_data)[0])
-			else:
-				print("// {} bytes".format(f.size))
+			_dump_basic_field(field_data, indent)
 		print(indent + "}")
 
 	def find_address(self, addr, dna_structs: List[DNAStruct]):
@@ -285,11 +331,11 @@ class BlendFile:
 				print("  #{} = ".format(i), end='')
 				self._dump_object(data, ds, dna_structs, idx_by_name, "  ")
 
-	def _parse_dna1(self, data) -> List[DNAStruct]:
+	def _parse_dna1(self, data: bytes) -> List[DNAStruct]:
 		data = data[4:]
 
-		names = []
-		types = []
+		names: list[str] = []
+		types: list[TypeInf] = []
 
 		name, num = self.unpack("4sI", data[:8])
 		data = data[8:]
@@ -326,7 +372,7 @@ class BlendFile:
 		name, num = self.unpack("4sI", data[:8])
 		data = data[8:]
 		ofs = 0
-		dna_structs = []
+		dna_structs: list[DNAStruct] = []
 		for i in range(num):
 			typeidx, nfields = self.unpack("HH", data[ofs:ofs + 4])
 
@@ -373,30 +419,40 @@ if __name__ == "__main__":
 			if args.info:
 				print(bf)
 
+			dna_structs = None
 			if args.dna or args.dump or args.id or args.dot or args.size or args.find != None:
 				dna_structs = bf.scan_dna()
 
 			if args.dna:
+				assert dna_structs is not None
 				for i, s in enumerate(dna_structs):
 					print("{} [#{}]".format(s, i))
 					for f in s.fields:
 						print("   ", f)
+					if s.fields:
+						last_field = s.fields[-1]
+						assert (last_field.offset + last_field.size) == s.size
 
 			if args.dump:
+				assert dna_structs is not None
 				bf.dump_all(dna_structs)
 
 			if args.id:
+				assert dna_structs is not None
 				print("{} of {} datablocks containing {} of {} objects totalling {} of {} bytes are ID".format(
 					*bf.count_id_content(dna_structs)))
 
 			if args.dot:
+				assert dna_structs is not None
 				bf.dump_dot_graph(dna_structs)
 
 			if args.size:
+				assert dna_structs is not None
 				for k, v in bf.size_stats(dna_structs):
 					s, c = v
 					print("  {:24} : {:9} bytes in {} objects".format(k, s, c))
 
 			if args.find != None:
+				assert dna_structs is not None
 				addr = int(args.find, 16)
 				bf.find_address(addr, dna_structs)

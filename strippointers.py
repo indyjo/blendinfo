@@ -2,7 +2,7 @@
 
 import struct
 import sys
-from typing import List, IO
+from typing import List, IO, Union
 
 from blendinfo import DNAStruct, BlendFile
 
@@ -11,8 +11,13 @@ class StripBlendFile(BlendFile):
 	def __init__(self, file: IO):
 		BlendFile.__init__(self, file)
 
-	def replace_pointers(self, dna_structs: List[DNAStruct], restore_from: IO, extract_to: IO) -> None:
-		idx_by_name = {}
+	def replace_pointers(
+		self,
+		dna_structs: List[DNAStruct],
+		restore_from: Union[IO[bytes], None],
+		extract_to: Union[IO[bytes], None],
+	) -> None:
+		idx_by_name: dict[str, int] = {}
 		for idx, ds in enumerate(dna_structs):
 			idx_by_name[ds.name] = idx
 
