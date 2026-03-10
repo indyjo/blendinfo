@@ -116,7 +116,14 @@ class BlendFile:
 		MAGIC = b"BLENDER"
 		header = self.file.read(len(MAGIC))
 		if header != MAGIC:
-			raise ValueError("Not a .blend file (header: {})".format(header))
+			# Since Blender 5.0, .blend files are compressed with Zstandard by default.
+			ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
+			if header[:4] == ZSTD_MAGIC:
+				raise ValueError(
+					"File is compressed with Zstandard, "
+					"please resave .blend file without compression or decompress it first."
+				)
+			raise ValueError(f"Not a .blend file (header: {header})")
 
 		next_byte = self.file.read(1)
 		use_old_header = False
